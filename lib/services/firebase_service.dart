@@ -12,7 +12,7 @@ class GateService {
 
   // Default configuration based on user's project (Singapore / Southeast Asia)
   String projectId = "wong-autogate";
-  String apiKey = "YOUR_FIREBASE_WEB_API_KEY";
+  String apiKey = "AIzaSyBCv87FCAqupLdMydOxvVm6M-Z_ZfYXMBU";
   String databaseUrl = "https://wong-autogate-default-rtdb.asia-southeast1.firebasedatabase.app";
 
   bool _isInitialized = false;
