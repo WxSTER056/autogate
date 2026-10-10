@@ -17,10 +17,12 @@ class SpeechService {
   final ValueNotifier<double> soundLevel = ValueNotifier<double>(0.0);
   final ValueNotifier<String> statusMessage = ValueNotifier<String>("Initializing speech...");
 
-  // Control auto-restart for continuous listening
-  bool continuousListening = true;
+  // Control whether to continuously loop after timeout
+  // Default to false to avoid frantic start-stop cycling on Android
+  bool continuousListening = false;
   bool _manualStop = false;
   DateTime? _lastTriggerTime;
+  Timer? _restartDebounceTimer;
 
   // Callback when a valid door command is detected
   Function(String command)? onDoorCommandDetected;
@@ -52,7 +54,6 @@ class SpeechService {
 
   Future<bool> initSpeech() async {
     try {
-      // _speech.initialize automatically requests RECORD_AUDIO runtime permission
       bool available = await _speech.initialize(
         onStatus: _handleStatus,
         onError: _handleError,
@@ -63,7 +64,7 @@ class SpeechService {
       if (available) {
         statusMessage.value = "Ready to listen";
       } else {
-        statusMessage.value = "Speech recognition unavailable";
+        statusMessage.value = "Microphone or Speech unavailable";
       }
       return available;
     } catch (e) {
@@ -80,15 +81,18 @@ class SpeechService {
       statusMessage.value = "Listening for 'open the door' / 'close the door'...";
     } else if (status == "notListening" || status == "done") {
       isListening.value = false;
-      // If continuous listening is enabled and user didn't manually stop, restart listening
+
+      // Only restart if continuous listening is explicitly enabled and not manually stopped
       if (continuousListening && !_manualStop) {
-        Future.delayed(const Duration(milliseconds: 600), () {
-          if (!_manualStop && !isListening.value) {
+        _restartDebounceTimer?.cancel();
+        // Give Android audio engine at least 2 seconds cooldown to prevent rapid start/stop flashing
+        _restartDebounceTimer = Timer(const Duration(milliseconds: 2000), () {
+          if (continuousListening && !_manualStop && !_speech.isListening) {
             startListening();
           }
         });
       } else {
-        statusMessage.value = "Tap mic to speak";
+        statusMessage.value = "Standby • Tap mic to speak";
       }
     }
   }
@@ -96,11 +100,19 @@ class SpeechService {
   void _handleError(SpeechRecognitionError errorNotification) {
     debugPrint("Speech Error: ${errorNotification.errorMsg} - permanent: ${errorNotification.permanent}");
     isListening.value = false;
-    statusMessage.value = "Speech error: ${errorNotification.errorMsg}";
+
+    // Handle common Android errors gracefully (e.g., error_no_match, error_busy, error_speech_timeout)
+    if (errorNotification.errorMsg.contains("error_no_match") ||
+        errorNotification.errorMsg.contains("error_speech_timeout")) {
+      statusMessage.value = "Standby • Tap mic to speak";
+    } else {
+      statusMessage.value = "Speech: ${errorNotification.errorMsg}";
+    }
 
     if (continuousListening && !_manualStop && !errorNotification.permanent) {
-      Future.delayed(const Duration(seconds: 1), () {
-        if (!_manualStop && !isListening.value) {
+      _restartDebounceTimer?.cancel();
+      _restartDebounceTimer = Timer(const Duration(milliseconds: 3000), () {
+        if (continuousListening && !_manualStop && !_speech.isListening) {
           startListening();
         }
       });
@@ -109,6 +121,7 @@ class SpeechService {
 
   Future<void> startListening() async {
     _manualStop = false;
+    _restartDebounceTimer?.cancel();
 
     if (!_speech.isAvailable) {
       bool ok = await initSpeech();
@@ -118,6 +131,7 @@ class SpeechService {
     if (_speech.isListening) return;
 
     try {
+      wordsSpoken.value = "";
       await _speech.listen(
         onResult: (result) {
           final text = result.recognizedWords.toLowerCase().trim();
@@ -125,7 +139,7 @@ class SpeechService {
           _checkVoiceCommands(text);
         },
         listenOptions: stt.SpeechListenOptions(
-          listenMode: stt.ListenMode.confirmation,
+          listenMode: stt.ListenMode.dictation, // Dictation mode allows longer listening without instant cuts
           cancelOnError: false,
           partialResults: true,
         ),
@@ -142,9 +156,10 @@ class SpeechService {
 
   void stopListening() {
     _manualStop = true;
+    _restartDebounceTimer?.cancel();
     _speech.stop();
     isListening.value = false;
-    statusMessage.value = "Voice listening stopped";
+    statusMessage.value = "Voice listening paused";
   }
 
   void _checkVoiceCommands(String spokenText) {
@@ -186,6 +201,7 @@ class SpeechService {
   }
 
   void dispose() {
+    _restartDebounceTimer?.cancel();
     _speech.stop();
   }
 }
