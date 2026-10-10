@@ -10,8 +10,6 @@ class SpeechService {
 
   final stt.SpeechToText _speech = stt.SpeechToText();
 
-  // Stable UI state: Remains TRUE consistently while listening mode is active
-  // This completely eliminates the annoying on-off-on-off (开关开关) UI blinking!
   final ValueNotifier<bool> isListening = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isInitialized = ValueNotifier<bool>(false);
   final ValueNotifier<String> wordsSpoken = ValueNotifier<String>("");
@@ -19,15 +17,15 @@ class SpeechService {
   final ValueNotifier<double> soundLevel = ValueNotifier<double>(0.0);
   final ValueNotifier<String> statusMessage = ValueNotifier<String>("Initializing speech...");
 
+  // Control auto-restart for continuous listening
   bool continuousListening = true;
-  bool _userStopped = false;
+  bool _manualStop = false;
   DateTime? _lastTriggerTime;
-  Timer? _reconnectTimer;
 
   // Callback when a valid door command is detected
   Function(String command)? onDoorCommandDetected;
 
-  /// Keywords for opening and closing the door (English & Chinese)
+  /// Keywords for opening and closing the door
   final List<String> openKeywords = [
     "open the door",
     "open door",
@@ -54,6 +52,7 @@ class SpeechService {
 
   Future<bool> initSpeech() async {
     try {
+      // _speech.initialize automatically requests RECORD_AUDIO runtime permission
       bool available = await _speech.initialize(
         onStatus: _handleStatus,
         onError: _handleError,
@@ -62,9 +61,9 @@ class SpeechService {
 
       isInitialized.value = available;
       if (available) {
-        statusMessage.value = "Listening for 'open the door' / 'close the door'...";
+        statusMessage.value = "Ready to listen";
       } else {
-        statusMessage.value = "Microphone unavailable";
+        statusMessage.value = "Speech recognition unavailable";
       }
       return available;
     } catch (e) {
@@ -76,63 +75,47 @@ class SpeechService {
 
   void _handleStatus(String status) {
     debugPrint("Speech Status: $status");
-
     if (status == "listening") {
       isListening.value = true;
       statusMessage.value = "Listening for 'open the door' / 'close the door'...";
     } else if (status == "notListening" || status == "done") {
-      // CRITICAL FIX: If continuous listening is enabled and user didn't explicitly pause it,
-      // DO NOT set isListening.value to false! Keep the UI stably glowing and active!
-      if (continuousListening && !_userStopped) {
-        _reconnectTimer?.cancel();
-        // Quiet background restart without blinking the UI
-        _reconnectTimer = Timer(const Duration(milliseconds: 250), () {
-          if (continuousListening && !_userStopped && !_speech.isListening) {
-            _startNativeListening();
+      isListening.value = false;
+      // If continuous listening is enabled and user didn't manually stop, restart listening
+      if (continuousListening && !_manualStop) {
+        Future.delayed(const Duration(milliseconds: 600), () {
+          if (!_manualStop && !isListening.value) {
+            startListening();
           }
         });
       } else {
-        isListening.value = false;
-        statusMessage.value = "Voice paused • Tap mic to listen";
+        statusMessage.value = "Tap mic to speak";
       }
     }
   }
 
   void _handleError(SpeechRecognitionError errorNotification) {
     debugPrint("Speech Error: ${errorNotification.errorMsg} - permanent: ${errorNotification.permanent}");
+    isListening.value = false;
+    statusMessage.value = "Speech error: ${errorNotification.errorMsg}";
 
-    if (continuousListening && !_userStopped && !errorNotification.permanent) {
-      _reconnectTimer?.cancel();
-      _reconnectTimer = Timer(const Duration(milliseconds: 500), () {
-        if (continuousListening && !_userStopped && !_speech.isListening) {
-          _startNativeListening();
+    if (continuousListening && !_manualStop && !errorNotification.permanent) {
+      Future.delayed(const Duration(seconds: 1), () {
+        if (!_manualStop && !isListening.value) {
+          startListening();
         }
       });
-    } else {
-      isListening.value = false;
-      statusMessage.value = "Tap mic to speak";
     }
   }
 
   Future<void> startListening() async {
-    _userStopped = false;
-    isListening.value = true; // Immediately lock UI to active state!
-    statusMessage.value = "Listening for 'open the door'...";
-    _reconnectTimer?.cancel();
+    _manualStop = false;
 
     if (!_speech.isAvailable) {
       bool ok = await initSpeech();
-      if (!ok) {
-        isListening.value = false;
-        return;
-      }
+      if (!ok) return;
     }
 
-    _startNativeListening();
-  }
-
-  Future<void> _startNativeListening() async {
-    if (_speech.isListening || _userStopped) return;
+    if (_speech.isListening) return;
 
     try {
       await _speech.listen(
@@ -142,7 +125,7 @@ class SpeechService {
           _checkVoiceCommands(text);
         },
         listenOptions: stt.SpeechListenOptions(
-          listenMode: stt.ListenMode.confirmation, // Instant partial results
+          listenMode: stt.ListenMode.confirmation,
           cancelOnError: false,
           partialResults: true,
         ),
@@ -150,17 +133,18 @@ class SpeechService {
           soundLevel.value = level;
         },
       );
+      isListening.value = true;
     } catch (e) {
-      debugPrint("Native listen error: $e");
+      debugPrint("Start listening error: $e");
+      isListening.value = false;
     }
   }
 
   void stopListening() {
-    _userStopped = true;
-    _reconnectTimer?.cancel();
+    _manualStop = true;
     _speech.stop();
-    isListening.value = false; // Only turn off when user manually taps to stop!
-    statusMessage.value = "Voice paused • Tap mic to resume";
+    isListening.value = false;
+    statusMessage.value = "Voice listening stopped";
   }
 
   void _checkVoiceCommands(String spokenText) {
@@ -202,7 +186,6 @@ class SpeechService {
   }
 
   void dispose() {
-    _reconnectTimer?.cancel();
     _speech.stop();
   }
 }

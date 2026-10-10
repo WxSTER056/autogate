@@ -492,9 +492,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   return Column(
                     children: [
                       Text(
-                        listening
-                            ? "语音监听已就绪 • 请说 'Open the door' 或 'Close the door'"
-                            : "语音已暂停 • 点击麦克风开启监听",
+                        listening ? "Listening for speech..." : "Tap mic to activate voice",
                         style: TextStyle(
                           color: listening ? const Color(0xFF38BDF8) : Colors.white60,
                           fontSize: 13,
