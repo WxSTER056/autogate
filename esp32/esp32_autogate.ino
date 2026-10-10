@@ -18,15 +18,12 @@ const char* FIREBASE_URL = "https://wong-autogate-default-rtdb.asia-southeast1.f
 #define RF_PULSE_DELAY 580  // 脈衝時長 (us)
 #define RF_PROTOCOL 5       // 協議編號
 
-// 板載藍色 LED 腳位 (GPIO 2 同時也是 GDO0，發射時會同步閃爍)
-#define ONBOARD_LED 2
-
 RCSwitch mySwitch = RCSwitch();
 WiFiClientSecure client;
 HTTPClient http;
 unsigned long lastCheckTime = 0;
 
-// 發射射頻信號函式
+// 發射射頻信號函式 (完全按照你原本可正常開門的原始寫法)
 void triggerDoorRF() {
   Serial.println("\n[RF] >>> 正在發射 330MHz 射頻訊號開/關門...");
   
@@ -37,9 +34,6 @@ void triggerDoorRF() {
   // 發射信號 (數值, 位元長度)
   mySwitch.send(RF_CODE, RF_BIT_LENGTH);
   
-  // 發射完畢切回待機(Sidle)，避免晶片持續發熱
-  ELECHOUSE_cc1101.setSidle();
-  
   Serial.println("[RF] >>> 射頻信號發射完成！");
 }
 
@@ -47,11 +41,8 @@ void setup() {
   Serial.begin(115200);
   delay(1000);
 
-  pinMode(ONBOARD_LED, OUTPUT);
-  digitalWrite(ONBOARD_LED, LOW);
-
   Serial.println("\n==========================================");
-  Serial.println("=== AutoGate 完整控制系統啟動中 ===");
+  Serial.println("=== AutoGate 門控系統已啟動 ===");
   Serial.println("==========================================");
 
   // --- 初始化 CC1101 ---
@@ -59,7 +50,8 @@ void setup() {
   if (ELECHOUSE_cc1101.getCC1101()) {
     Serial.println("[CC1101] 晶片連線成功！");
   } else {
-    Serial.println("[CC1101] 提示：未偵測到 CC1101，請檢查 SPI 線路接好沒！");
+    Serial.println("[CC1101] 錯誤：找不到晶片，請檢查線路！");
+    while (1) delay(1000);
   }
 
   // 設定 330MHz 與射頻參數
@@ -67,7 +59,6 @@ void setup() {
   mySwitch.setProtocol(RF_PROTOCOL);
   mySwitch.setPulseLength(RF_PULSE_DELAY);
   mySwitch.setRepeatTransmit(10); // 重複發射 10 次確保門機能收到
-  ELECHOUSE_cc1101.setSidle();
 
   // --- 連接 Wi-Fi ---
   Serial.print("[WiFi] 正在連接: ");
@@ -83,15 +74,7 @@ void setup() {
   // 設置安全客戶端為免證書快速連線
   client.setInsecure();
 
-  // 開機連線成功，LED 快閃 3 次
-  for (int i = 0; i < 3; i++) {
-    digitalWrite(ONBOARD_LED, HIGH);
-    delay(150);
-    digitalWrite(ONBOARD_LED, LOW);
-    delay(150);
-  }
-
-  Serial.println("[系統就緒] 正在監聽手機開門指令...\n");
+  Serial.println("[系統就緒] 正在即時監聽手機開門指令...\n");
 }
 
 void loop() {
@@ -128,7 +111,7 @@ void loop() {
           Serial.printf("❌ [Firebase] 重置失敗，HTTP 代碼: %d\n", patchCode);
         }
 
-        Serial.println(">>> 動作完成，等待下一次指令...\n");
+        Serial.println(">>> 開門完成，等待下一次指令...\n");
       }
     }
     http.end();
