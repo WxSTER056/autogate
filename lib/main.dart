@@ -24,7 +24,7 @@ class AutoGateApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AutoGate AI Controller',
+      title: 'Wong AutoGate',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         brightness: Brightness.dark,

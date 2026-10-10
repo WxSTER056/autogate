@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Background layer for the Wong AutoGate adaptive launcher icon. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <gradient
+        android:angle="270"
+        android:startColor="#0F172A"
+        android:endColor="#0B0F19"
+        android:type="linear" />
+</shape>

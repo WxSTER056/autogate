@@ -329,34 +329,64 @@ class _HomeScreenState extends State<HomeScreen>
           ),
 
           // ESP32 Status
-          ValueListenableBuilder<String>(
-            valueListenable: _gateService.doorStatus,
-            builder: (context, status, _) {
-              Color statusColor = const Color(0xFF94A3B8);
-              if (status == "action_completed") statusColor = const Color(0xFF10B981);
-              if (status == "triggering") statusColor = const Color(0xFF38BDF8);
+          Flexible(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_gateService.secureTriggerMode) ...[
+                  _buildBadge(
+                    label: "SIGNED",
+                    color: const Color(0xFF10B981),
+                    tooltip: "指令带 HMAC 签名，固件会校验",
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Flexible(
+                  child: ValueListenableBuilder<String>(
+                    valueListenable: _gateService.doorStatus,
+                    builder: (context, status, _) {
+                      Color statusColor = const Color(0xFF94A3B8);
+                      if (status == "action_completed") statusColor = const Color(0xFF10B981);
+                      if (status == "triggering") statusColor = const Color(0xFF38BDF8);
 
-              return Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: statusColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: statusColor.withValues(alpha: 0.3)),
-                ),
-                child: Text(
-                  "ESP32: ${status.toUpperCase()}",
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
+                      return _buildBadge(
+                        label: "ESP32: ${status.toUpperCase()}",
+                        color: statusColor,
+                      );
+                    },
                   ),
                 ),
-              );
-            },
+              ],
+            ),
           ),
         ],
       ),
     );
+  }
+
+  Widget _buildBadge({
+    required String label,
+    required Color color,
+    String? tooltip,
+  }) {
+    final badge = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: color.withValues(alpha: 0.3)),
+      ),
+      child: Text(
+        label,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+    return tooltip == null ? badge : Tooltip(message: tooltip, child: badge);
   }
 
   Widget _buildVoiceTriggeredBanner() {

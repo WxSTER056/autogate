@@ -6,7 +6,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
 
     <application
-        android:label="AutoGate Voice"
+        android:label="Wong AutoGate"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
