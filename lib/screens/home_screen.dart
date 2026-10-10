@@ -12,7 +12,8 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final GateService _gateService = GateService();
   final SpeechService _speechService = SpeechService();
 
@@ -25,6 +26,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
     _gateAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1200),
@@ -37,18 +40,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _initServices() async {
-    // 1. Initialize Firebase
-    await _gateService.initialize();
+    _speechService.onDoorCommandDetected = _handleVoiceCommand;
 
-    // 2. Setup speech callback
-    _speechService.onDoorCommandDetected = (command) {
-      _handleVoiceCommand(command);
-    };
+    // Do not let a slow cloud connection delay the microphone, the two are
+    // independent and Firebase reconnects on its own.
+    unawaited(_gateService.initialize());
 
-    // 3. Auto-start listening on app launch
     if (_isAutoListenEnabled) {
       await _speechService.initSpeech();
-      await _speechService.startListening();
     }
   }
 
@@ -75,22 +74,23 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
     final success = await _gateService.sendTriggerSignal(source: source);
     if (!mounted) return;
 
-    if (success) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              const Icon(Icons.check_circle, color: Colors.white, size: 20),
-              const SizedBox(width: 8),
-              Text("RF Signal Trigger Sent ($source)!"),
-            ],
-          ),
-          backgroundColor: const Color(0xFF059669),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
+    // Replace any queued snackbar instead of stacking them.
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.check_circle, color: Colors.white, size: 20),
+            const SizedBox(width: 8),
+            Text("RF Signal Trigger Sent ($source)!"),
+          ],
         ),
-      );
-    } else {
+        backgroundColor: const Color(0xFF059669),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+    if (!success) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text("Failed to send signal. Please check Firebase settings."),
@@ -102,11 +102,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _toggleListening() {
-    if (_speechService.isListening.value) {
-      _speechService.stopListening();
-    } else {
-      _speechService.startListening();
-    }
+    final enabled = !_speechService.continuousListening;
+    setState(() => _isAutoListenEnabled = enabled);
+    _speechService.setEnabled(enabled);
   }
 
   void _openSettings() {
@@ -183,6 +181,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _gateAnimController.dispose();
     _commandDisplayTimer?.cancel();
     super.dispose();
@@ -436,7 +435,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
               Row(
                 children: [
-                  const Text("Auto-listen", style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  const Text("自动聆听", style: TextStyle(color: Colors.white60, fontSize: 12)),
                   Transform.scale(
                     scale: 0.8,
                     child: Switch(
@@ -444,15 +443,8 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       activeTrackColor: const Color(0xFF38BDF8),
                       activeThumbColor: Colors.white,
                       onChanged: (val) {
-                        setState(() {
-                          _isAutoListenEnabled = val;
-                          _speechService.continuousListening = val;
-                        });
-                        if (val) {
-                          _speechService.startListening();
-                        } else {
-                          _speechService.stopListening();
-                        }
+                        setState(() => _isAutoListenEnabled = val);
+                        _speechService.setEnabled(val);
                       },
                     ),
                   ),
@@ -483,24 +475,59 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           const SizedBox(height: 20),
 
           // Status & Speech Live Output
-          ValueListenableBuilder<bool>(
-            valueListenable: _speechService.isListening,
-            builder: (context, listening, _) {
-              return ValueListenableBuilder<String>(
-                valueListenable: _speechService.wordsSpoken,
-                builder: (context, words, _) {
-                  return Column(
+          ValueListenableBuilder<VoiceState>(
+            valueListenable: _speechService.state,
+            builder: (context, voiceState, _) {
+              final unavailable = voiceState == VoiceState.unavailable;
+              final active = voiceState == VoiceState.listening ||
+                  voiceState == VoiceState.starting ||
+                  voiceState == VoiceState.reconnecting;
+
+              return Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Text(
-                        listening ? "Listening for speech..." : "Tap mic to activate voice",
-                        style: TextStyle(
-                          color: listening ? const Color(0xFF38BDF8) : Colors.white60,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w500,
+                      if (active)
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation(Color(0xFF38BDF8)),
+                          ),
+                        )
+                      else
+                        const Icon(Icons.mic_off, color: Colors.white38, size: 14),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          voiceState.label,
+                          style: TextStyle(
+                            color: active ? const Color(0xFF38BDF8) : Colors.white60,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Container(
+                      if (unavailable)
+                        TextButton(
+                          onPressed: () {
+                            setState(() => _isAutoListenEnabled = true);
+                            _speechService.startListening();
+                          },
+                          child: const Text(
+                            "重试",
+                            style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ValueListenableBuilder<String>(
+                    valueListenable: _speechService.wordsSpoken,
+                    builder: (context, words, _) {
+                      return Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
@@ -509,7 +536,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                           border: Border.all(color: const Color(0xFF1E293B)),
                         ),
                         child: Text(
-                          words.isNotEmpty ? "\"$words\"" : "Say: \"Open the door\" or \"Close the door\"",
+                          words.isNotEmpty
+                              ? "\"$words\""
+                              : "说: \"open the door\" 或 \"开门\"",
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: words.isNotEmpty ? Colors.white : Colors.white38,
@@ -518,10 +547,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                             fontWeight: words.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
                           ),
                         ),
-                      ),
-                    ],
-                  );
-                },
+                      );
+                    },
+                  ),
+                ],
               );
             },
           ),
@@ -701,7 +730,14 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               _buildChip("🗣️ \"Close gate\""),
               _buildChip("🗣️ \"开门\""),
               _buildChip("🗣️ \"关门\""),
+              _buildChip("🗣️ \"开闸\" / \"关闸\""),
             ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            "需要同时包含“动作词 + 门/闸”，因此 “open the app”、“close the browser” "
+            "之类的闲聊不会误触发。",
+            style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.4),
           ),
         ],
       ),
