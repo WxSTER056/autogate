@@ -492,7 +492,9 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   return Column(
                     children: [
                       Text(
-                        listening ? "Listening for speech..." : "Tap mic to activate voice",
+                        listening
+                            ? "语音监听已就绪 • 请说 'Open the door' 或 'Close the door'"
+                            : "语音已暂停 • 点击麦克风开启监听",
                         style: TextStyle(
                           color: listening ? const Color(0xFF38BDF8) : Colors.white60,
                           fontSize: 13,
@@ -620,28 +622,28 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   Widget _buildManualControls() {
     return Column(
       children: [
-        // Main Giant Trigger Button
+        // Single Main Tactile Trigger Button
         GestureDetector(
           onTapDown: (_) => setState(() => _isPressingTrigger = true),
           onTapUp: (_) => setState(() => _isPressingTrigger = false),
           onTapCancel: () => setState(() => _isPressingTrigger = false),
-          onTap: () => _sendGateTrigger("Manual Main Button"),
+          onTap: () => _sendGateTrigger("Manual Button"),
           child: AnimatedScale(
             scale: _isPressingTrigger ? 0.96 : 1.0,
             duration: const Duration(milliseconds: 100),
             child: Container(
-              height: 76,
+              height: 80,
               decoration: BoxDecoration(
                 gradient: const LinearGradient(
                   colors: [Color(0xFF0284C7), Color(0xFF2563EB)],
                   begin: Alignment.topLeft,
                   end: Alignment.bottomRight,
                 ),
-                borderRadius: BorderRadius.circular(22),
+                borderRadius: BorderRadius.circular(24),
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF2563EB).withValues(alpha: 0.4),
-                    blurRadius: 16,
+                    color: const Color(0xFF2563EB).withValues(alpha: 0.45),
+                    blurRadius: 18,
                     offset: const Offset(0, 6),
                   ),
                 ],
@@ -649,13 +651,13 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               child: const Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.power_settings_new, color: Colors.white, size: 30),
-                  SizedBox(width: 12),
+                  Icon(Icons.power_settings_new, color: Colors.white, size: 34),
+                  SizedBox(width: 14),
                   Text(
-                    "TRIGGER GATE (OPEN / CLOSE)",
+                    "一键开关门 (TRIGGER GATE)",
                     style: TextStyle(
                       color: Colors.white,
-                      fontSize: 17,
+                      fontSize: 18,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1.1,
                     ),
@@ -664,49 +666,6 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
               ),
             ),
           ),
-        ),
-
-        const SizedBox(height: 12),
-
-        // Split Secondary Buttons: OPEN GATE & CLOSE GATE
-        Row(
-          children: [
-            Expanded(
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF065F46),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  elevation: 2,
-                ),
-                onPressed: () => _sendGateTrigger("Open Button"),
-                icon: const Icon(Icons.lock_open, size: 20),
-                label: const Text(
-                  "OPEN GATE",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-              ),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF991B1B),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(vertical: 16),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  elevation: 2,
-                ),
-                onPressed: () => _sendGateTrigger("Close Button"),
-                icon: const Icon(Icons.lock_outline, size: 20),
-                label: const Text(
-                  "CLOSE GATE",
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-              ),
-            ),
-          ],
         ),
       ],
     );

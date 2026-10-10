@@ -10,6 +10,8 @@ class SpeechService {
 
   final stt.SpeechToText _speech = stt.SpeechToText();
 
+  // Stable UI state: Remains TRUE consistently while listening mode is active
+  // This completely eliminates the annoying on-off-on-off (开关开关) UI blinking!
   final ValueNotifier<bool> isListening = ValueNotifier<bool>(false);
   final ValueNotifier<bool> isInitialized = ValueNotifier<bool>(false);
   final ValueNotifier<String> wordsSpoken = ValueNotifier<String>("");
@@ -17,11 +19,10 @@ class SpeechService {
   final ValueNotifier<double> soundLevel = ValueNotifier<double>(0.0);
   final ValueNotifier<String> statusMessage = ValueNotifier<String>("Initializing speech...");
 
-  // Keep continuous listening enabled so voice triggers anytime without manual clicking
   bool continuousListening = true;
-  bool _manualStop = false;
+  bool _userStopped = false;
   DateTime? _lastTriggerTime;
-  Timer? _restartDebounceTimer;
+  Timer? _reconnectTimer;
 
   // Callback when a valid door command is detected
   Function(String command)? onDoorCommandDetected;
@@ -63,7 +64,7 @@ class SpeechService {
       if (available) {
         statusMessage.value = "Listening for 'open the door' / 'close the door'...";
       } else {
-        statusMessage.value = "Microphone or Speech unavailable";
+        statusMessage.value = "Microphone unavailable";
       }
       return available;
     } catch (e) {
@@ -75,21 +76,24 @@ class SpeechService {
 
   void _handleStatus(String status) {
     debugPrint("Speech Status: $status");
+
     if (status == "listening") {
       isListening.value = true;
       statusMessage.value = "Listening for 'open the door' / 'close the door'...";
     } else if (status == "notListening" || status == "done") {
-      // Seamless restart: if continuous listening is on, quietly re-listen in background
-      if (continuousListening && !_manualStop) {
-        _restartDebounceTimer?.cancel();
-        _restartDebounceTimer = Timer(const Duration(milliseconds: 300), () {
-          if (continuousListening && !_manualStop && !_speech.isListening) {
-            startListening(silentRestart: true);
+      // CRITICAL FIX: If continuous listening is enabled and user didn't explicitly pause it,
+      // DO NOT set isListening.value to false! Keep the UI stably glowing and active!
+      if (continuousListening && !_userStopped) {
+        _reconnectTimer?.cancel();
+        // Quiet background restart without blinking the UI
+        _reconnectTimer = Timer(const Duration(milliseconds: 250), () {
+          if (continuousListening && !_userStopped && !_speech.isListening) {
+            _startNativeListening();
           }
         });
       } else {
         isListening.value = false;
-        statusMessage.value = "Standby • Tap mic to speak";
+        statusMessage.value = "Voice paused • Tap mic to listen";
       }
     }
   }
@@ -97,11 +101,11 @@ class SpeechService {
   void _handleError(SpeechRecognitionError errorNotification) {
     debugPrint("Speech Error: ${errorNotification.errorMsg} - permanent: ${errorNotification.permanent}");
 
-    if (continuousListening && !_manualStop && !errorNotification.permanent) {
-      _restartDebounceTimer?.cancel();
-      _restartDebounceTimer = Timer(const Duration(milliseconds: 600), () {
-        if (continuousListening && !_manualStop && !_speech.isListening) {
-          startListening(silentRestart: true);
+    if (continuousListening && !_userStopped && !errorNotification.permanent) {
+      _reconnectTimer?.cancel();
+      _reconnectTimer = Timer(const Duration(milliseconds: 500), () {
+        if (continuousListening && !_userStopped && !_speech.isListening) {
+          _startNativeListening();
         }
       });
     } else {
@@ -110,22 +114,27 @@ class SpeechService {
     }
   }
 
-  Future<void> startListening({bool silentRestart = false}) async {
-    _manualStop = false;
-    _restartDebounceTimer?.cancel();
+  Future<void> startListening() async {
+    _userStopped = false;
+    isListening.value = true; // Immediately lock UI to active state!
+    statusMessage.value = "Listening for 'open the door'...";
+    _reconnectTimer?.cancel();
 
     if (!_speech.isAvailable) {
       bool ok = await initSpeech();
-      if (!ok) return;
+      if (!ok) {
+        isListening.value = false;
+        return;
+      }
     }
 
-    if (_speech.isListening) return;
+    _startNativeListening();
+  }
+
+  Future<void> _startNativeListening() async {
+    if (_speech.isListening || _userStopped) return;
 
     try {
-      if (!silentRestart) {
-        wordsSpoken.value = "";
-      }
-
       await _speech.listen(
         onResult: (result) {
           final text = result.recognizedWords.toLowerCase().trim();
@@ -133,8 +142,7 @@ class SpeechService {
           _checkVoiceCommands(text);
         },
         listenOptions: stt.SpeechListenOptions(
-          // confirmation mode emits instantaneous partial results as words are spoken!
-          listenMode: stt.ListenMode.confirmation,
+          listenMode: stt.ListenMode.confirmation, // Instant partial results
           cancelOnError: false,
           partialResults: true,
         ),
@@ -142,21 +150,17 @@ class SpeechService {
           soundLevel.value = level;
         },
       );
-      isListening.value = true;
     } catch (e) {
-      debugPrint("Start listening error: $e");
-      if (!silentRestart) {
-        isListening.value = false;
-      }
+      debugPrint("Native listen error: $e");
     }
   }
 
   void stopListening() {
-    _manualStop = true;
-    _restartDebounceTimer?.cancel();
+    _userStopped = true;
+    _reconnectTimer?.cancel();
     _speech.stop();
-    isListening.value = false;
-    statusMessage.value = "Voice listening paused";
+    isListening.value = false; // Only turn off when user manually taps to stop!
+    statusMessage.value = "Voice paused • Tap mic to resume";
   }
 
   void _checkVoiceCommands(String spokenText) {
@@ -198,7 +202,7 @@ class SpeechService {
   }
 
   void dispose() {
-    _restartDebounceTimer?.cancel();
+    _reconnectTimer?.cancel();
     _speech.stop();
   }
 }
