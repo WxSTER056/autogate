@@ -75,4 +75,58 @@ void main() {
       );
     });
   });
+
+  group('matchCommand - half open', () {
+    test('matches English half-open phrasings', () {
+      for (final phrase in [
+        'half open the door',
+        'half-open the door',
+        'half open',
+        'open the door halfway',
+        'open the door half way',
+        'open halfway',
+        'partially open the gate',
+      ]) {
+        expect(
+          SpeechService.matchCommand(phrase)?.command,
+          kCommandHalfOpenDoor,
+          reason: '"$phrase" should be half-open',
+        );
+      }
+    });
+
+    test('matches Chinese half-open phrasings', () {
+      for (final phrase in [
+        '半开',
+        '半開',
+        '半开门',
+        '開一半',
+        '开一半',
+        '开门一半',
+      ]) {
+        expect(
+          SpeechService.matchCommand(phrase)?.command,
+          kCommandHalfOpenDoor,
+          reason: '"$phrase" should be half-open',
+        );
+      }
+    });
+
+    test('half-open wins over the plain open rule', () {
+      // "half open the door" also satisfies the open rule (open + door),
+      // which used to resolve to a full open.
+      final match = SpeechService.matchCommand('half open the door')!;
+      expect(match.command, kCommandHalfOpenDoor);
+      expect(match.command, isNot(kCommandOpenDoor));
+    });
+
+    test('plain open is still a full open', () {
+      expect(
+          SpeechService.matchCommand('open the door')!.command, kCommandOpenDoor);
+      expect(SpeechService.matchCommand('开门')!.command, kCommandOpenDoor);
+      // "half" must be a whole word, never the tail of another word.
+      expect(SpeechService.matchCommand('open the halfhearted door')?.command,
+          kCommandOpenDoor);
+    });
+  });
 }

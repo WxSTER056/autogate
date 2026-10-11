@@ -1,9 +1,36 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../services/firebase_service.dart';
+import '../services/gate_command.dart';
 import '../services/speech_service.dart';
 import '../widgets/pulse_mic_button.dart';
 import '../widgets/settings_dialog.dart';
+
+/// Maps a recognised voice command to the gate action it performs.
+GateAction actionForCommand(String command) {
+  switch (command) {
+    case kCommandHalfOpenDoor:
+      return GateAction.halfOpen;
+    case kCommandOpenDoor:
+    case kCommandCloseDoor:
+    default:
+      return GateAction.toggle;
+  }
+}
+
+/// Display text for a recognised voice command.
+String labelForCommand(String command) {
+  switch (command) {
+    case kCommandHalfOpenDoor:
+      return "HALF OPEN THE DOOR";
+    case kCommandOpenDoor:
+      return "OPEN THE DOOR";
+    case kCommandCloseDoor:
+      return "CLOSE THE DOOR";
+    default:
+      return command;
+  }
+}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -52,8 +79,9 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _handleVoiceCommand(String command) {
+    final action = actionForCommand(command);
     setState(() {
-      _lastDetectedCommandDisplay = command == "OPEN_DOOR" ? "OPEN THE DOOR" : "CLOSE THE DOOR";
+      _lastDetectedCommandDisplay = labelForCommand(command);
     });
 
     _commandDisplayTimer?.cancel();
@@ -66,12 +94,16 @@ class _HomeScreenState extends State<HomeScreen>
     });
 
     // Send trigger signal to Firebase
-    _sendGateTrigger("Voice: $command");
+    _sendGateTrigger("Voice: ${action.label}", action: action);
   }
 
-  Future<void> _sendGateTrigger(String source) async {
+  Future<void> _sendGateTrigger(
+    String source, {
+    GateAction action = GateAction.toggle,
+  }) async {
     _gateAnimController.forward(from: 0.0);
-    final success = await _gateService.sendTriggerSignal(source: source);
+    final success =
+        await _gateService.sendTriggerSignal(source: source, action: action);
     if (!mounted) return;
 
     // Replace any queued snackbar instead of stacking them.
@@ -82,7 +114,7 @@ class _HomeScreenState extends State<HomeScreen>
           children: [
             const Icon(Icons.check_circle, color: Colors.white, size: 20),
             const SizedBox(width: 8),
-            Text("RF Signal Trigger Sent ($source)!"),
+            Text("RF Signal Sent ($source)!"),
           ],
         ),
         backgroundColor: const Color(0xFF059669),
@@ -677,54 +709,91 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildManualControls() {
-    return Column(
+    return Row(
       children: [
-        // Single Main Tactile Trigger Button
-        GestureDetector(
-          onTapDown: (_) => setState(() => _isPressingTrigger = true),
-          onTapUp: (_) => setState(() => _isPressingTrigger = false),
-          onTapCancel: () => setState(() => _isPressingTrigger = false),
-          onTap: () => _sendGateTrigger("Manual Button"),
-          child: AnimatedScale(
-            scale: _isPressingTrigger ? 0.96 : 1.0,
-            duration: const Duration(milliseconds: 100),
-            child: Container(
-              height: 80,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF0284C7), Color(0xFF2563EB)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(24),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF2563EB).withValues(alpha: 0.45),
-                    blurRadius: 18,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: const Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.power_settings_new, color: Colors.white, size: 34),
-                  SizedBox(width: 14),
-                  Text(
-                    "一键开关门 (TRIGGER GATE)",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.1,
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        Expanded(
+          child: _buildTriggerButton(
+            label: "一键开关门",
+            sublabel: "TRIGGER",
+            icon: Icons.power_settings_new,
+            colors: const [Color(0xFF0284C7), Color(0xFF2563EB)],
+            onTap: () => _sendGateTrigger("Manual Button"),
+          ),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: _buildTriggerButton(
+            label: "半开门",
+            sublabel: "HALF OPEN",
+            icon: Icons.door_sliding,
+            colors: const [Color(0xFF7C3AED), Color(0xFFA855F7)],
+            onTap: () => _sendGateTrigger("Half Open Button",
+                action: GateAction.halfOpen),
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildTriggerButton({
+    required String label,
+    required String sublabel,
+    required IconData icon,
+    required List<Color> colors,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTapDown: (_) => setState(() => _isPressingTrigger = true),
+      onTapUp: (_) => setState(() => _isPressingTrigger = false),
+      onTapCancel: () => setState(() => _isPressingTrigger = false),
+      onTap: onTap,
+      child: AnimatedScale(
+        scale: _isPressingTrigger ? 0.96 : 1.0,
+        duration: const Duration(milliseconds: 100),
+        child: Container(
+          height: 96,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: colors,
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: colors.last.withValues(alpha: 0.45),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: Colors.white, size: 30),
+              const SizedBox(height: 6),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              Text(
+                sublabel,
+                style: const TextStyle(
+                  color: Colors.white70,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 1.4,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 
@@ -756,17 +825,18 @@ class _HomeScreenState extends State<HomeScreen>
             children: [
               _buildChip("🗣️ \"Open the door\""),
               _buildChip("🗣️ \"Close the door\""),
-              _buildChip("🗣️ \"Open gate\""),
-              _buildChip("🗣️ \"Close gate\""),
+              _buildChip("🗣️ \"Half open the door\""),
+              _buildChip("🗣️ \"Open the door halfway\""),
               _buildChip("🗣️ \"开门\""),
               _buildChip("🗣️ \"关门\""),
               _buildChip("🗣️ \"开闸\" / \"关闸\""),
+              _buildChip("🗣️ \"半开门\" / \"开一半\""),
             ],
           ),
           const SizedBox(height: 10),
           const Text(
             "需要同时包含“动作词 + 门/闸”，因此 “open the app”、“close the browser” "
-            "之类的闲聊不会误触发。",
+            "之类的闲聊不会误触发。半开门会发送两次讯号（间隔 3 秒）。",
             style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.4),
           ),
         ],

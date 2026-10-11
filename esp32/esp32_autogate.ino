@@ -11,10 +11,16 @@
 
 // ================= 1. 安全觸發驗證 =================
 // 資料庫是公開可寫的，所以不能只靠 "trigger": true 就發射射頻。
-// App 會改寫 /door_control/trigger_v2 = { "sig", "ts", "n" }，
+// App 會改寫 /door_control/trigger_v2 = { "sig", "ts", "n", "action" }，
 // 這裡用與 App 端相同的 HMAC-SHA256 驗證；驗不過就直接丟棄。
 #define TRIGGER_V2_ENABLED 1      // 刷完新固件後請確認 App 端也開啟安全模式
 #define TRIGGER_REPLAY_WINDOW 30  // 秒；時間戳超出此範圍視為重播攻擊
+
+// ================= 1b. 動作與發射次數 =================
+// action 欄位決定要發幾次射頻：
+//   "toggle"    -> 1 次（一鍵開關門）
+//   "half_open" -> 2 次，中間間隔 HALF_OPEN_GAP_MS（半開門）
+#define HALF_OPEN_GAP_MS 3000
 
 // ================= 2. CC1101 射頻設定 =================
 #define CC1101_GDO0_PIN 2   // 對應 ESP32 上的 G2 引腳
@@ -101,8 +107,8 @@ bool constantTimeEquals(const String& a, const String& b) {
   return diff == 0;
 }
 
-// 驗證簽章；通過回傳 true
-bool verifyTrigger(const String& payload, long& nonceOut) {
+// 驗證簽章；通過回傳 true，actionOut 帶出要執行的動作
+bool verifyTrigger(const String& payload, long& nonceOut, String& actionOut) {
   String sig;
   long ts = 0;
   long nonce = 0;
@@ -128,8 +134,14 @@ bool verifyTrigger(const String& payload, long& nonceOut) {
     return false;
   }
 
-  String expected = hmacSha256Hex(GATE_TRIGGER_SECRET,
-                                  String(ts) + ":" + String(nonce));
+  // 動作欄位也納入簽章，避免把已簽名的開門指令竄改成半開門。
+  String action = "toggle";
+  if (!jsonFindString(payload, "action", action) || action.length() == 0) {
+    action = "toggle";
+  }
+
+  String expected = hmacSha256Hex(
+      GATE_TRIGGER_SECRET, String(ts) + ":" + String(nonce) + ":" + action);
   if (expected.length() == 0) {
     Serial.println("  ✗ HMAC 計算失敗");
     return false;
@@ -145,20 +157,33 @@ bool verifyTrigger(const String& payload, long& nonceOut) {
   }
 
   nonceOut = nonce;
+  actionOut = action;
   return true;
 }
 
 // ================= 3. 射頻發射 =================
 void triggerDoorRF() {
-  Serial.println("\n[RF] >>> 正在發射 330MHz 射頻訊號開/關門...");
-
   ELECHOUSE_cc1101.SetTx();
   mySwitch.enableTransmit(CC1101_GDO0_PIN);
   mySwitch.send(RF_CODE, RF_BIT_LENGTH);
-
-  Serial.println("[RF] >>> 射頻信號射頻發射完成！");
 }
 
+// 依 action 決定發射次數：半開門 = 發一次，等 3 秒，再發一次
+void performAction(const String& action) {
+  if (action == "half_open") {
+    Serial.println("\n[RF] >>> 半開門：發射第 1 次…");
+    triggerDoorRF();
+    Serial.printf("[RF] >>> 等待 %d ms 後發射第 2 次…\n", HALF_OPEN_GAP_MS);
+    delay(HALF_OPEN_GAP_MS);
+    Serial.println("[RF] >>> 發射第 2 次…");
+    triggerDoorRF();
+    Serial.println("[RF] >>> 半開門訊號發射完成！");
+  } else {
+    Serial.println("\n[RF] >>> 正在發射 330MHz 射頻訊號開/關門...");
+    triggerDoorRF();
+    Serial.println("[RF] >>> 射頻信號發射完成！");
+  }
+}
 void writeStatus(const char* status) {
   http.begin(client, FIREBASE_URL);
   http.addHeader("Content-Type", "application/json");
@@ -215,8 +240,8 @@ void setup() {
     Serial.print("[安全] 觸發金鑰長度: ");
     Serial.println(strlen(GATE_TRIGGER_SECRET));
     // 印出一組已知答案，方便和 App 端對照確認兩邊演算法一致
-    Serial.print("[安全] 自我測試 HMAC(\"1700000000:12345\") = ");
-    Serial.println(hmacSha256Hex(GATE_TRIGGER_SECRET, "1700000000:12345"));
+    Serial.print("[安全] 自我測試 HMAC(\"1700000000:12345:toggle\") = ");
+    Serial.println(hmacSha256Hex(GATE_TRIGGER_SECRET, "1700000000:12345:toggle"));
   }
 
   Serial.println("[系統就緒] 正在即時監聽手機開門指令...\n");
@@ -228,47 +253,56 @@ void loop() {
     return;
   }
 
-  if (millis() - lastCheckTime > 300) {
-    lastCheckTime = millis();
+  if (millis() - lastCheckTime <= 300) {
+    return;
+  }
+  lastCheckTime = millis();
 
-    http.begin(client, FIREBASE_URL);
-    int httpCode = http.GET();
+  http.begin(client, FIREBASE_URL);
+  int httpCode = http.GET();
 
-    if (httpCode == 200) {
-      String payload = http.getString();
+  if (httpCode != 200) {
+    http.end();
+    return;
+  }
+
+  String payload = http.getString();
+  // 先關掉連線再動作：半開門要阻塞 3 秒，不能把 TLS 連線握在手裡。
+  http.end();
 
 #if TRIGGER_V2_ENABLED
-      // --- 優先走簽章通道 ---
-      if (payload.indexOf("\"sig\"") >= 0) {
-        long nonce = 0;
-        if (verifyTrigger(payload, nonce)) {
-          if (nonce == lastConsumedNonce) {
-            // 同一筆指令已經執行過，忽略
-          } else {
-            Serial.printf("\n⚡ [已驗證觸發] nonce=%ld\n", nonce);
-            triggerDoorRF();
-            lastConsumedNonce = nonce;
-            rejectCount = 0;
-            writeStatus("action_completed");
-            Serial.println(">>> 開門完成，等待下一次指令...\n");
-          }
-        } else {
-          Serial.println("  （已拒絕此次觸發）");
-        }
-      }
+  // --- 優先走簽章通道 ---
+  if (payload.indexOf("\"sig\"") >= 0) {
+    long nonce = 0;
+    String action = "toggle";
+    if (!verifyTrigger(payload, nonce, action)) {
+      Serial.println("  （已拒絕此次觸發）");
+      return;
+    }
+    if (nonce == lastConsumedNonce) {
+      return;  // 同一筆指令已經執行過，忽略
+    }
+    Serial.printf("\n⚡ [已驗證觸發] nonce=%ld action=%s\n", nonce,
+                  action.c_str());
+    performAction(action);
+    lastConsumedNonce = nonce;
+    rejectCount = 0;
+    writeStatus("action_completed");
+    Serial.println(">>> 動作完成，等待下一次指令...\n");
+    return;
+  }
 #endif
 
-      // --- 舊的無簽章通道，僅在安全模式關閉時使用 ---
+  // --- 舊的無簽章通道，僅在安全模式關閉時使用 ---
 #if !TRIGGER_V2_ENABLED
-      if (payload.indexOf("\"trigger\":true") > 0 ||
-          payload.indexOf("\"trigger\": true") > 0) {
-        Serial.println("\n⚡ [指令觸發] 收到手機開門信號！");
-        triggerDoorRF();
-        writeStatus("action_completed");
-        Serial.println(">>> 開門完成，等待下一次指令...\n");
-      }
-#endif
-    }
-    http.end();
+  if (payload.indexOf("\"trigger\":true") > 0 ||
+      payload.indexOf("\"trigger\": true") > 0) {
+    String action = "toggle";
+    jsonFindString(payload, "action", action);
+    Serial.printf("\n⚡ [指令觸發] action=%s\n", action.c_str());
+    performAction(action);
+    writeStatus("action_completed");
+    Serial.println(">>> 動作完成，等待下一次指令...\n");
   }
+#endif
 }

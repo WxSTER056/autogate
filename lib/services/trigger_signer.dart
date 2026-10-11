@@ -3,6 +3,8 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
+import 'gate_command.dart';
+
 /// Builds the signed payload that the ESP32 firmware will accept before it
 /// transmits any RF.
 ///
@@ -38,33 +40,52 @@ class TriggerSigner {
   static final Random _random = Random.secure();
 
   /// The exact string both sides sign. Order and separator are part of the
-  /// protocol — `ts:n`, no spaces.
-  static String canonicalPayload(int timestamp, int nonce) => '$timestamp:$nonce';
+  /// protocol — `ts:n:action`, no spaces. The action is inside the signature
+  /// so a captured open cannot be replayed as a half-open.
+  static String canonicalPayload(int timestamp, int nonce, GateAction action) =>
+      '$timestamp:$nonce:${action.wire}';
 
   /// Lowercase hex HMAC-SHA256 of [canonicalPayload] under [secret].
-  static String sign(String secret, int timestamp, int nonce) {
+  static String sign(
+    String secret,
+    int timestamp,
+    int nonce,
+    GateAction action,
+  ) {
     final key = utf8.encode(secret);
-    final message = utf8.encode(canonicalPayload(timestamp, nonce));
+    final message = utf8.encode(canonicalPayload(timestamp, nonce, action));
     return Hmac(sha256, key).convert(message).toString();
   }
 
   /// A signed trigger ready to be written to `/door_control/trigger_v2`.
-  static Map<String, Object> buildPayload(String secret) {
+  static Map<String, Object> buildPayload(
+    String secret,
+    GateAction action, {
+    String? source,
+  }) {
     final now = DateTime.now();
     final timestamp = now.millisecondsSinceEpoch ~/ 1000;
     // Keeps the nonce unique even when two triggers land in the same second.
     final nonce = _random.nextInt(0x7fffffff);
     return <String, Object>{
-      'sig': sign(secret, timestamp, nonce),
+      'sig': sign(secret, timestamp, nonce, action),
       'ts': timestamp,
       'n': nonce,
+      'action': action.wire,
+      if (source != null) 'by': source,
     };
   }
 
   /// Verification, mirroring the firmware. Used by the app's self-test so the
   /// secret can be confirmed before flashing.
-  static bool verify(String secret, String signature, int timestamp, int nonce) {
-    final expected = sign(secret, timestamp, nonce);
+  static bool verify(
+    String secret,
+    String signature,
+    int timestamp,
+    int nonce,
+    GateAction action,
+  ) {
+    final expected = sign(secret, timestamp, nonce, action);
     return _constantTimeEquals(expected, signature);
   }
 
