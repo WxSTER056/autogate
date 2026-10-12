@@ -12,10 +12,25 @@ class GateService {
   factory GateService() => _instance;
   GateService._internal();
 
-  // Default configuration based on user's project (Singapore / Southeast Asia)
-  String projectId = "wong-autogate";
-  String apiKey = "AIzaSyBCv87FCAqupLdMydOxvVm6M-Z_ZfYXMBU";
-  String databaseUrl = "https://wong-autogate-default-rtdb.asia-southeast1.firebasedatabase.app";
+  // Firebase settings are injected at build time so they are not committed:
+  //
+  //   flutter build apk --release \
+  //     --dart-define=FIREBASE_PROJECT_ID=... \
+  //     --dart-define=FIREBASE_API_KEY=... \
+  //     --dart-define=FIREBASE_DATABASE_URL=...
+  //
+  // When left empty they can still be filled in from the in-app settings
+  // dialog, which is the fallback for anyone building from a clean checkout.
+  String projectId = const String.fromEnvironment('FIREBASE_PROJECT_ID');
+  String apiKey = const String.fromEnvironment('FIREBASE_API_KEY');
+  String databaseUrl = const String.fromEnvironment('FIREBASE_DATABASE_URL');
+
+  /// True once we have enough to talk to the database. False means the app was
+  /// built without `--dart-define` and the user has to fill in Settings.
+  bool get hasCredentials =>
+      apiKey.isNotEmpty &&
+      databaseUrl.isNotEmpty &&
+      Uri.tryParse(databaseUrl)?.hasAbsolutePath == true;
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
@@ -57,6 +72,13 @@ class GateService {
   final ValueNotifier<String?> lastTriggerTime = ValueNotifier<String?>(null);
   final ValueNotifier<List<String>> logs = ValueNotifier<List<String>>([]);
 
+  /// False until we know we have working Firebase settings.
+  final ValueNotifier<bool> isConfigured = ValueNotifier<bool>(false);
+
+  void _setConfigured(bool value) {
+    isConfigured.value = value;
+  }
+
   void addLog(String message) {
     final now = DateTime.now();
     final timeStr = "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}";
@@ -73,6 +95,13 @@ class GateService {
       databaseUrl = customDbUrl.replaceAll(RegExp(r'/+$'), '');
     }
     if (customProjectId != null && customProjectId.isNotEmpty) projectId = customProjectId;
+
+    if (!hasCredentials) {
+      addLog("Firebase 未设定：请在右上角设置中填写 API Key 与数据库网址，"
+          "或使用 --dart-define 在编译时注入。语音功能不受影响。");
+      _setConfigured(false);
+      return false;
+    }
 
     try {
       addLog("Initializing Firebase for project: $projectId...");
@@ -153,6 +182,7 @@ class GateService {
       });
 
       _isInitialized = true;
+      _setConfigured(true);
       addLog("Firebase initialized successfully!");
       return true;
     } catch (e) {
@@ -177,6 +207,30 @@ class GateService {
 
     addLog("Trigger requested via $source (${action.wire})");
 
+    // The app repeats the trigger itself rather than asking the firmware to
+    // emit two pulses. That way half-open works on the firmware that is
+    // already flashed, with no reflash needed.
+    for (var i = 1; i <= action.pulseCount; i++) {
+      if (i > 1) {
+        addLog("半开门：等待 ${GateAction.pulseGap.inSeconds} 秒后发送第 $i 次讯号…");
+        await Future<void>.delayed(GateAction.pulseGap);
+      }
+      final ok = await _sendOnce(source);
+      if (!ok) {
+        addLog("第 $i 次讯号发送失败，半开门中止。");
+        return false;
+      }
+    }
+
+    if (action.pulseCount > 1) {
+      addLog("半开门完成：已发送 ${action.pulseCount} 次讯号。");
+    }
+    return true;
+  }
+
+  /// Writes a single trigger. Always a plain toggle, so every pulse maps to
+  /// exactly one RF transmission regardless of the firmware version.
+  Future<bool> _sendOnce(String source) async {
     final signed = secureTriggerMode && triggerSecret.isNotEmpty;
     if (secureTriggerMode && triggerSecret.isEmpty) {
       addLog("Secure mode is on but no secret is set - falling back to "
@@ -188,19 +242,19 @@ class GateService {
         final payload = <String, Object?>{
           'status': 'triggering',
           'last_triggered_by': source,
-          'last_triggered_time': now.toIso8601String(),
-          'action': action.wire,
+          'last_triggered_time': DateTime.now().toIso8601String(),
         };
 
         if (signed) {
           final signedPayload =
-              TriggerSigner.buildPayload(triggerSecret, action, source: source);
+              TriggerSigner.buildPayload(triggerSecret, GateAction.toggle,
+                  source: source);
           // Firmware drops anything without a valid signature, so the legacy
           // unsigned boolean is deliberately not written any more.
           payload['trigger_v2'] = signedPayload;
           payload['trigger'] = false;
           addLog("Signed trigger -> ts=${signedPayload['ts']} "
-              "n=${signedPayload['n']} action=${action.wire} "
+              "n=${signedPayload['n']} "
               "sig=${_abbreviate(signedPayload['sig']! as String)}");
         } else {
           payload['trigger'] = true;
@@ -215,11 +269,11 @@ class GateService {
         return true;
       } else {
         addLog("Database reference not ready. Trying HTTP REST fallback...");
-        return await _sendTriggerViaRest(source, action);
+        return await _sendTriggerViaRest(source);
       }
     } catch (e) {
       addLog("Error sending trigger via SDK: $e. Falling back to HTTP REST...");
-      return await _sendTriggerViaRest(source, action);
+      return await _sendTriggerViaRest(source);
     }
   }
 
@@ -227,7 +281,7 @@ class GateService {
       value.length <= 12 ? value : '${value.substring(0, 12)}...';
 
   /// Fallback using Firebase Realtime Database REST API
-  Future<bool> _sendTriggerViaRest(String source, GateAction action) async {
+  Future<bool> _sendTriggerViaRest(String source) async {
     try {
       final url = Uri.parse("$databaseUrl/door_control.json");
       final signed = secureTriggerMode && triggerSecret.isNotEmpty;
@@ -235,10 +289,10 @@ class GateService {
         "status": "triggering",
         "last_triggered_by": source,
         "last_triggered_time": DateTime.now().toIso8601String(),
-        "action": action.wire,
       };
       if (signed) {
-        final p = TriggerSigner.buildPayload(triggerSecret, action, source: source);
+        final p =
+            TriggerSigner.buildPayload(triggerSecret, GateAction.toggle, source: source);
         body["trigger_v2"] = p;
         body["trigger"] = false;
       } else {

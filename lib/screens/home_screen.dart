@@ -328,6 +328,14 @@ class _HomeScreenState extends State<HomeScreen>
           ValueListenableBuilder<bool>(
             valueListenable: _gateService.isConnected,
             builder: (context, connected, _) {
+              final configured = _gateService.isConfigured.value;
+              final color = !configured
+                  ? const Color(0xFFF87171)
+                  : (connected ? const Color(0xFF10B981) : const Color(0xFFF59E0B));
+              final label = !configured
+                  ? "Cloud: Not configured"
+                  : (connected ? "Cloud: Online" : "Cloud: Connecting...");
+
               return Row(
                 children: [
                   Container(
@@ -335,11 +343,10 @@ class _HomeScreenState extends State<HomeScreen>
                     height: 10,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: connected ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                      color: color,
                       boxShadow: [
                         BoxShadow(
-                          color: (connected ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
-                              .withValues(alpha: 0.6),
+                          color: color.withValues(alpha: 0.6),
                           blurRadius: 6,
                           spreadRadius: 1,
                         ),
@@ -348,9 +355,13 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                   const SizedBox(width: 8),
                   Text(
-                    connected ? "Cloud: Online" : "Cloud: Connecting...",
+                    label,
                     style: TextStyle(
-                      color: connected ? const Color(0xFF34D399) : const Color(0xFFFBBF24),
+                      color: !configured
+                          ? const Color(0xFFFCA5A5)
+                          : (connected
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFFFBBF24)),
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
                     ),

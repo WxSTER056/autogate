@@ -11,16 +11,10 @@
 
 // ================= 1. 安全觸發驗證 =================
 // 資料庫是公開可寫的，所以不能只靠 "trigger": true 就發射射頻。
-// App 會改寫 /door_control/trigger_v2 = { "sig", "ts", "n", "action" }，
+// App 會改寫 /door_control/trigger_v2 = { "sig", "ts", "n" }，
 // 這裡用與 App 端相同的 HMAC-SHA256 驗證；驗不過就直接丟棄。
 #define TRIGGER_V2_ENABLED 1      // 刷完新固件後請確認 App 端也開啟安全模式
 #define TRIGGER_REPLAY_WINDOW 30  // 秒；時間戳超出此範圍視為重播攻擊
-
-// ================= 1b. 動作與發射次數 =================
-// action 欄位決定要發幾次射頻：
-//   "toggle"    -> 1 次（一鍵開關門）
-//   "half_open" -> 2 次，中間間隔 HALF_OPEN_GAP_MS（半開門）
-#define HALF_OPEN_GAP_MS 3000
 
 // ================= 2. CC1101 射頻設定 =================
 #define CC1101_GDO0_PIN 2   // 對應 ESP32 上的 G2 引腳
@@ -134,11 +128,11 @@ bool verifyTrigger(const String& payload, long& nonceOut, String& actionOut) {
     return false;
   }
 
-  // 動作欄位也納入簽章，避免把已簽名的開門指令竄改成半開門。
+  // 動作欄位：App 目前一律送 "toggle"。半開門由 App 送兩次觸發實現，
+  // 所以這裡保留解析僅供除錯，實際上每次觸發只發一次射頻。
   String action = "toggle";
-  if (!jsonFindString(payload, "action", action) || action.length() == 0) {
-    action = "toggle";
-  }
+  jsonFindString(payload, "action", action);
+  if (action.length() == 0) action = "toggle";
 
   String expected = hmacSha256Hex(
       GATE_TRIGGER_SECRET, String(ts) + ":" + String(nonce) + ":" + action);
@@ -168,21 +162,13 @@ void triggerDoorRF() {
   mySwitch.send(RF_CODE, RF_BIT_LENGTH);
 }
 
-// 依 action 決定發射次數：半開門 = 發一次，等 3 秒，再發一次
-void performAction(const String& action) {
-  if (action == "half_open") {
-    Serial.println("\n[RF] >>> 半開門：發射第 1 次…");
-    triggerDoorRF();
-    Serial.printf("[RF] >>> 等待 %d ms 後發射第 2 次…\n", HALF_OPEN_GAP_MS);
-    delay(HALF_OPEN_GAP_MS);
-    Serial.println("[RF] >>> 發射第 2 次…");
-    triggerDoorRF();
-    Serial.println("[RF] >>> 半開門訊號發射完成！");
-  } else {
-    Serial.println("\n[RF] >>> 正在發射 330MHz 射頻訊號開/關門...");
-    triggerDoorRF();
-    Serial.println("[RF] >>> 射頻信號發射完成！");
-  }
+// 一次觸發 = 一次射頻。
+// 「半開門」不在這裡做二次發射：App 會自己隔 3 秒發兩次觸發，
+// 因此任何版本的固件都能正確支援半開門，不需要為了這個功能重新燒錄。
+void performAction() {
+  Serial.println("\n[RF] >>> 正在發射 330MHz 射頻訊號開/關門...");
+  triggerDoorRF();
+  Serial.println("[RF] >>> 射頻信號發射完成！");
 }
 void writeStatus(const char* status) {
   http.begin(client, FIREBASE_URL);
@@ -284,7 +270,7 @@ void loop() {
     }
     Serial.printf("\n⚡ [已驗證觸發] nonce=%ld action=%s\n", nonce,
                   action.c_str());
-    performAction(action);
+    performAction();
     lastConsumedNonce = nonce;
     rejectCount = 0;
     writeStatus("action_completed");
@@ -297,10 +283,8 @@ void loop() {
 #if !TRIGGER_V2_ENABLED
   if (payload.indexOf("\"trigger\":true") > 0 ||
       payload.indexOf("\"trigger\": true") > 0) {
-    String action = "toggle";
-    jsonFindString(payload, "action", action);
-    Serial.printf("\n⚡ [指令觸發] action=%s\n", action.c_str());
-    performAction(action);
+    Serial.println("\n⚡ [指令觸發] 收到手機開門信號！");
+    performAction();
     writeStatus("action_completed");
     Serial.println(">>> 動作完成，等待下一次指令...\n");
   }

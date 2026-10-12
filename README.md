@@ -10,6 +10,21 @@ AI 语音与手机远程控制电动门系统（基于 Flutter + Firebase Realti
 - **GitHub Release 下载**：[Releases 页面](https://github.com/WxSTER056/autogate/releases)
 - **应用名称**：Wong AutoGate
 
+### 从源码编译
+
+凭据不再写死在代码里，编译时注入：
+
+```bash
+flutter build apk --release \
+  --dart-define=FIREBASE_PROJECT_ID=<你的项目ID> \
+  --dart-define=FIREBASE_API_KEY=<Web API Key> \
+  --dart-define=FIREBASE_DATABASE_URL=https://<你的项目>-default-rtdb.<区域>.firebasedatabase.app
+```
+
+不传 `--dart-define` 也能编译运行，只是 Firebase 显示「未设定」，需要用户在
+App 内「设置」中手动填写（语音功能不受影响）。ESP32 的 Wi-Fi 与签名密钥走
+`esp32/secrets.h`，同样不入库。
+
 ---
 
 ## 🔐 2. 安全：签署触发指令（重要）
@@ -61,7 +76,7 @@ Dart 端实现在 [`lib/services/trigger_signer.dart`](./lib/services/trigger_si
 
 | 项目 | 原因 |
 | :--- | :--- |
-| **Wi-Fi 密码** `wong77033109` | 硬编码在固件里，且已进入公开仓库历史 |
+| **Wi-Fi 密码** | 曾硬编码在固件里，且已进入公开仓库历史 —— **请立刻更换** |
 | Firebase 数据库地址 | 公开可写，这是本次漏洞的根因 |
 | Realtime Database 安全规则 | 建议 `.read: false`、`.write: false`，只靠固件签名放行（ESP32 用 REST 匿名读取会受影响，需配合 Admin SDK 才能锁规则） |
 
