@@ -207,12 +207,10 @@ class GateService {
 
     addLog("Trigger requested via $source (${action.wire})");
 
-    // The app repeats the trigger itself rather than asking the firmware to
-    // emit two pulses. That way half-open works on the firmware that is
-    // already flashed, with no reflash needed.
+    // 半开门和一键开关门完全一样，只是发完第一次后再等 5 秒补发一次。
     for (var i = 1; i <= action.pulseCount; i++) {
       if (i > 1) {
-        addLog("半开门：等待 ${GateAction.pulseGap.inSeconds} 秒后发送第 $i 次讯号…");
+        addLog("半开门：等待 ${GateAction.pulseGap.inSeconds} 秒后补发第 $i 次讯号…");
         await Future<void>.delayed(GateAction.pulseGap);
       }
       final ok = await _sendOnce(source);

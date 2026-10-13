@@ -9,8 +9,6 @@ import '../widgets/settings_dialog.dart';
 /// Maps a recognised voice command to the gate action it performs.
 GateAction actionForCommand(String command) {
   switch (command) {
-    case kCommandHalfOpenDoor:
-      return GateAction.halfOpen;
     case kCommandOpenDoor:
     case kCommandCloseDoor:
     default:
@@ -21,8 +19,6 @@ GateAction actionForCommand(String command) {
 /// Display text for a recognised voice command.
 String labelForCommand(String command) {
   switch (command) {
-    case kCommandHalfOpenDoor:
-      return "HALF OPEN THE DOOR";
     case kCommandOpenDoor:
       return "OPEN THE DOOR";
     case kCommandCloseDoor:
@@ -836,18 +832,17 @@ class _HomeScreenState extends State<HomeScreen>
             children: [
               _buildChip("🗣️ \"Open the door\""),
               _buildChip("🗣️ \"Close the door\""),
-              _buildChip("🗣️ \"Half open the door\""),
-              _buildChip("🗣️ \"Open the door halfway\""),
+              _buildChip("🗣️ \"Open gate\""),
+              _buildChip("🗣️ \"Close gate\""),
               _buildChip("🗣️ \"开门\""),
               _buildChip("🗣️ \"关门\""),
               _buildChip("🗣️ \"开闸\" / \"关闸\""),
-              _buildChip("🗣️ \"半开门\" / \"开一半\""),
             ],
           ),
           const SizedBox(height: 10),
           const Text(
             "需要同时包含“动作词 + 门/闸”，因此 “open the app”、“close the browser” "
-            "之类的闲聊不会误触发。半开门会发送两次讯号（间隔 3 秒）。",
+            "之类的闲聊不会误触发。",
             style: TextStyle(color: Colors.white38, fontSize: 11, height: 1.4),
           ),
         ],

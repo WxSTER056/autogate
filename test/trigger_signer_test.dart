@@ -92,9 +92,9 @@ void main() {
   });
 
   group('GateAction', () {
-    test('half open sends two pulses three seconds apart', () {
+    test('half open sends two triggers five seconds apart', () {
       expect(GateAction.halfOpen.pulseCount, 2);
-      expect(GateAction.pulseGap, const Duration(seconds: 3));
+      expect(GateAction.pulseGap, const Duration(seconds: 5));
     });
 
     test('toggle sends a single pulse', () {

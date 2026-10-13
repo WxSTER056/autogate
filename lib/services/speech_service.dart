@@ -9,9 +9,6 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 const String kCommandOpenDoor = 'OPEN_DOOR';
 const String kCommandCloseDoor = 'CLOSE_DOOR';
 
-/// Stop at a half-open position: two RF pulses three seconds apart.
-const String kCommandHalfOpenDoor = 'HALF_OPEN_DOOR';
-
 /// Normalised transcript plus the gate command it maps to.
 class CommandMatch {
   const CommandMatch(this.command, this.phrase);
@@ -51,11 +48,11 @@ class SpeechService {
   final stt.SpeechToText _speech = stt.SpeechToText();
 
   // --- Session tuning -----------------------------------------------------
-  /// Hard cap for a single recognition session: the mic stays open for ten
-  /// seconds at a time, then closes and is reopened.
-  static const Duration _maxSession = Duration(seconds: 10);
+  /// Hard cap for a single recognition session.
+  static const Duration _maxSession = Duration(seconds: 12);
 
-  /// End the session early after this much silence.
+  /// End the session after this much silence. Android already applies its own
+  /// ~2-3s pause, this just makes the cut-off deterministic.
   static const Duration _pauseAfterSilence = Duration(seconds: 4);
 
   /// How long to wait for the platform's final result before promoting the
@@ -65,11 +62,6 @@ class SpeechService {
 
   /// Gap between a finished session and the next one.
   static const Duration _restartGap = Duration(milliseconds: 350);
-
-  /// After a keyword fires the mic is closed immediately; this is how long we
-  /// then wait before opening it again. Long enough that the gate motor noise
-  /// is not picked up, short enough to stay responsive.
-  static const Duration _resumeAfterCommand = Duration(milliseconds: 1500);
 
   /// Watchdog: if the platform never reports `done` after `notListening`,
   /// restart anyway after this long.
@@ -117,9 +109,6 @@ class SpeechService {
   // --- Internal state -----------------------------------------------------
   Future<bool>? _initFuture;
   Timer? _restartTimer;
-
-  /// Reopens the mic shortly after a keyword fired, see [_handleResult].
-  Timer? _resumeTimer;
 
   /// Bumped whenever a session ends or is cancelled. Any pending restart
   /// carrying an older token is dropped.
@@ -361,8 +350,6 @@ class SpeechService {
   void _cancelRestart() {
     _restartTimer?.cancel();
     _restartTimer = null;
-    _resumeTimer?.cancel();
-    _resumeTimer = null;
   }
 
   /// Queue exactly one restart, replacing any previous one.
@@ -461,16 +448,6 @@ class SpeechService {
     _lastTriggerTime = DateTime.now();
     recognizedCommand.value = match.phrase;
     debugPrint("Command ${match.command} matched on '${match.phrase}'");
-
-    // Close the mic straight away: the keyword is all we needed, and leaving
-    // it open would let the gate motor noise trigger a second command.
-    _endSession();
-    _resumeTimer?.cancel();
-    _resumeTimer = Timer(_resumeAfterCommand, () {
-      _resumeTimer = null;
-      if (_shouldListen) _beginSession(immediate: true);
-    });
-
     onDoorCommandDetected?.call(match.command);
   }
 
@@ -512,12 +489,10 @@ class SpeechService {
   static const List<String> _contextualPhrases = [
     'open the door',
     'close the door',
-    'half open the door',
     'open gate',
     'close gate',
     '开门',
     '关门',
-    '半开门',
   ];
 
   // --- Command matching ---------------------------------------------------
@@ -544,18 +519,6 @@ class SpeechService {
     r'\b(door|doors|gate|gates|garage|barrier|shutter|roller)\b',
   );
 
-  /// Half-open must be tested before open/close, because "half open the door"
-  /// also satisfies the open rule.
-  static final RegExp _halfOpenEn = RegExp(
-    r'\bhalf[-\s]?open\b|\bhalf[-\s]?way\b|\bpartly\s+open\b|\bpartially\s+open\b',
-  );
-
-  static const List<String> _halfOpenZh = [
-    '半开一半', '開一半門', '半开一下', '半開一下', '只开一半', '只開一半',
-    '半开门', '半開門', '半开门', '半开', '半開', '开门一半', '開門一半',
-    '开一半', '開一半', '开一半门', '開一半門',
-  ];
-
   static const List<String> _openZh = [
     '开门', '開門', '开闸', '開閘', '打开门', '打開門', '打开大门', '门打开',
     '把门打开', '拉开门', '拉開門', '升起闸门', '升闸', '开一下门', '开门一下',
@@ -569,19 +532,11 @@ class SpeechService {
   ///
   /// Requires an action verb *and* a door-like target so that "open the app"
   /// or "close the browser" never operates the gate, and so that background
-  /// chatter does not trigger it. Half-open is checked first because its
-  /// wording overlaps with open.
+  /// chatter does not trigger it.
   static CommandMatch? matchCommand(String raw) {
     final text = raw.toLowerCase().replaceAll(_cleaner, ' ').trim();
     if (text.isEmpty) return null;
     if (_notForUs.hasMatch(text)) return null;
-
-    // Half-open takes priority over both open and close.
-    for (final phrase in _halfOpenZh) {
-      if (text.contains(phrase)) return CommandMatch(kCommandHalfOpenDoor, phrase);
-    }
-    final halfEn = _halfOpenEn.firstMatch(text);
-    if (halfEn != null) return CommandMatch(kCommandHalfOpenDoor, halfEn.group(0)!);
 
     // Chinese has no word boundaries, so match the phrases directly.
     for (final phrase in _closeZh) {
