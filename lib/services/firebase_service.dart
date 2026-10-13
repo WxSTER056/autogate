@@ -27,10 +27,17 @@ class GateService {
 
   /// True once we have enough to talk to the database. False means the app was
   /// built without `--dart-define` and the user has to fill in Settings.
-  bool get hasCredentials =>
-      apiKey.isNotEmpty &&
-      databaseUrl.isNotEmpty &&
-      Uri.tryParse(databaseUrl)?.hasAbsolutePath == true;
+  ///
+  /// Note: a bare `https://host` parses to an *empty* path, so `hasAbsolutePath`
+  /// is false for the normal case. Validate the scheme and host instead.
+  bool get hasCredentials {
+    final uri = Uri.tryParse(databaseUrl);
+    return apiKey.isNotEmpty &&
+        uri != null &&
+        uri.isAbsolute &&
+        (uri.scheme == 'https' || uri.scheme == 'http') &&
+        uri.host.isNotEmpty;
+  }
 
   bool _isInitialized = false;
   bool get isInitialized => _isInitialized;
