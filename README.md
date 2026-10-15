@@ -90,26 +90,24 @@ Dart 端实现在 [`lib/services/trigger_signer.dart`](./lib/services/trigger_si
 
 语音识别使用 `speech_to_text`（Android 上底层就是系统自带的 Google 语音识别服务 `SpeechRecognizer`）。
 
-**为什么麦克风之前会一直“开—关—开—关”？**
+**当前状态：语音已回到最初版本（提交 `8002a0f`）。**
 
-Android 的识别器只支持单次、有时限的会话（静音几秒后系统就会主动结束）。要做“持续聆听”就必须反复开启新会话。旧代码里 `notListening`、`done`、错误回调 **各自** 都会挂一个不可取消的 `Future.delayed` 重启定时器；而 `listen()` 返回后要等平台回报 `listening` 才会把 `isListening` 置为 true，这个窗口里多个定时器会同时通过“是否已在聆听”的判断，于是同一个原生识别器被连续调用多次 `listen()`，互相打断并抛出 busy 错误，再触发下一轮重启 —— 麦克风就一直闪，指令也会漏。
+`lib/services/speech_service.dart` 与最初提交逐字节相同，`home_screen.dart` 的语音卡片 UI
+也已还原。因此**麦克风持续开关的问题会再次出现**，这是刻意接受的取舍。
 
-**现在的做法（`lib/services/speech_service.dart`）：**
-
-| 机制 | 说明 |
-| :--- | :--- |
-| 单一重启调度器 | 全局只有一个重启 `Timer`，新调度必定取消旧的；`_sessionToken` 会丢弃过期的回调 |
-| 会话边界 | `listenFor: 12s` / `pauseFor: 4s`，由插件自己决定何时收尾，不再被系统随机掐断 |
-| 防重入 | `_sessionActive` 与 `_listenInFlight` 双保险，杜绝并发 `listen()` |
-| 空闲退避 | 连续几轮没有识别到字时，重启间隔按 350ms → 2s → 5s → 10s 递增，识别到字后立刻复位，保证说完话马上能用 |
-| 错误退避 | 报错后按 600ms → 2s → 4s → 8s 退避；遇到 permanent 错误（如权限被拒）直接停止，不再空转 |
-| 只认最终结果 | 门控指令只在 `finalResult` 时匹配，避免 partial “open” 先触发一次、最终结果再触发一次 |
-| 动作词 + 目标词 | 必须同时出现动作词和门/闸（`open the door`、`开门`、`关闸`…），并排除 `open the app`、`close the browser` 这类别的 App 指令 |
-| 前后台感知 | `HomeScreen` 转发 `AppLifecycleState`，退到后台立即 `cancel()`，回前台再恢复 |
+> 最初版本为什么会闪：Android 的识别器一次会话只活几秒，静音就结束；
+> 而 `notListening`、`done`、错误回调各自会挂一个不可取消的 `Future.delayed` 重启，
+> 多个定时器同时通过「是否已在聆听」的判断，重复调用 `listen()` 导致闪烁。
+>
+> 如果之后想再修，请保留这两点：
+> 1. 全局只允许**一个**重启定时器，新调度先取消旧的
+> 2. 指令在 `finalResult` 时才匹配，不要用 partial 结果触发
+>
+> 相关改动曾在 `ff43673`，需要时查看该提交的 diff。
 
 ---
 
-## 🚪 3.5 半开门
+## 🚪 4. 半开门
 
 `lib/services/gate_command.dart` 定义了 App 用的动作枚举：
 
@@ -130,7 +128,7 @@ Android 的识别器只支持单次、有时限的会话（静音几秒后系统
 
 ---
 
-## 🛠️ 4. 项目架构
+## 🛠️ 5. 项目架构
 
 1. **Flutter App**：
    - 支持打开即自动语音监听（支持 "Open the door", "Close the door", "Open gate", "Close gate", "开门", "关门", "开闸", "关闸"）。
@@ -148,7 +146,7 @@ Android 的识别器只支持单次、有时限的会话（静音几秒后系统
 
 ---
 
-## 🎨 5. 应用图标
+## 🎨 6. 应用图标
 
 图标由 [`tool/make_icons.py`](./tool/make_icons.py) 生成（需要 Python + Pillow）：
 
@@ -169,7 +167,7 @@ python tool/make_icons.py
 
 ---
 
-## 🔌 6. ESP32 接线指南
+## 🔌 7. ESP32 接线指南
 
 | CC1101 引脚 | ESP32 GPIO | 说明 |
 | :--- | :--- | :--- |

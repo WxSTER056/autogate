@@ -6,6 +6,10 @@ import '../services/speech_service.dart';
 import '../widgets/pulse_mic_button.dart';
 import '../widgets/settings_dialog.dart';
 
+/// Command strings emitted by the speech service.
+const String kCommandOpenDoor = 'OPEN_DOOR';
+const String kCommandCloseDoor = 'CLOSE_DOOR';
+
 /// Maps a recognised voice command to the gate action it performs.
 GateAction actionForCommand(String command) {
   switch (command) {
@@ -35,8 +39,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
+class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   final GateService _gateService = GateService();
   final SpeechService _speechService = SpeechService();
 
@@ -49,7 +52,6 @@ class _HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
 
     _gateAnimController = AnimationController(
       vsync: this,
@@ -63,14 +65,18 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   Future<void> _initServices() async {
-    _speechService.onDoorCommandDetected = _handleVoiceCommand;
+    // 1. Initialize Firebase
+    await _gateService.initialize();
 
-    // Do not let a slow cloud connection delay the microphone, the two are
-    // independent and Firebase reconnects on its own.
-    unawaited(_gateService.initialize());
+    // 2. Setup speech callback
+    _speechService.onDoorCommandDetected = (command) {
+      _handleVoiceCommand(command);
+    };
 
+    // 3. Auto-start listening on app launch
     if (_isAutoListenEnabled) {
       await _speechService.initSpeech();
+      await _speechService.startListening();
     }
   }
 
@@ -130,9 +136,11 @@ class _HomeScreenState extends State<HomeScreen>
   }
 
   void _toggleListening() {
-    final enabled = !_speechService.continuousListening;
-    setState(() => _isAutoListenEnabled = enabled);
-    _speechService.setEnabled(enabled);
+    if (_speechService.isListening.value) {
+      _speechService.stopListening();
+    } else {
+      _speechService.startListening();
+    }
   }
 
   void _openSettings() {
@@ -209,7 +217,6 @@ class _HomeScreenState extends State<HomeScreen>
 
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _gateAnimController.dispose();
     _commandDisplayTimer?.cancel();
     super.dispose();
@@ -504,7 +511,7 @@ class _HomeScreenState extends State<HomeScreen>
               ),
               Row(
                 children: [
-                  const Text("自动聆听", style: TextStyle(color: Colors.white60, fontSize: 12)),
+                  const Text("Auto-listen", style: TextStyle(color: Colors.white60, fontSize: 12)),
                   Transform.scale(
                     scale: 0.8,
                     child: Switch(
@@ -512,8 +519,15 @@ class _HomeScreenState extends State<HomeScreen>
                       activeTrackColor: const Color(0xFF38BDF8),
                       activeThumbColor: Colors.white,
                       onChanged: (val) {
-                        setState(() => _isAutoListenEnabled = val);
-                        _speechService.setEnabled(val);
+                        setState(() {
+                          _isAutoListenEnabled = val;
+                          _speechService.continuousListening = val;
+                        });
+                        if (val) {
+                          _speechService.startListening();
+                        } else {
+                          _speechService.stopListening();
+                        }
                       },
                     ),
                   ),
@@ -544,59 +558,24 @@ class _HomeScreenState extends State<HomeScreen>
           const SizedBox(height: 20),
 
           // Status & Speech Live Output
-          ValueListenableBuilder<VoiceState>(
-            valueListenable: _speechService.state,
-            builder: (context, voiceState, _) {
-              final unavailable = voiceState == VoiceState.unavailable;
-              final active = voiceState == VoiceState.listening ||
-                  voiceState == VoiceState.starting ||
-                  voiceState == VoiceState.reconnecting;
-
-              return Column(
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
+          ValueListenableBuilder<bool>(
+            valueListenable: _speechService.isListening,
+            builder: (context, listening, _) {
+              return ValueListenableBuilder<String>(
+                valueListenable: _speechService.wordsSpoken,
+                builder: (context, words, _) {
+                  return Column(
                     children: [
-                      if (active)
-                        const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation(Color(0xFF38BDF8)),
-                          ),
-                        )
-                      else
-                        const Icon(Icons.mic_off, color: Colors.white38, size: 14),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          voiceState.label,
-                          style: TextStyle(
-                            color: active ? const Color(0xFF38BDF8) : Colors.white60,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                          ),
+                      Text(
+                        listening ? "Listening for speech..." : "Tap mic to activate voice",
+                        style: TextStyle(
+                          color: listening ? const Color(0xFF38BDF8) : Colors.white60,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
-                      if (unavailable)
-                        TextButton(
-                          onPressed: () {
-                            setState(() => _isAutoListenEnabled = true);
-                            _speechService.startListening();
-                          },
-                          child: const Text(
-                            "重试",
-                            style: TextStyle(color: Color(0xFF38BDF8), fontSize: 12),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ValueListenableBuilder<String>(
-                    valueListenable: _speechService.wordsSpoken,
-                    builder: (context, words, _) {
-                      return Container(
+                      const SizedBox(height: 8),
+                      Container(
                         width: double.infinity,
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
@@ -605,9 +584,7 @@ class _HomeScreenState extends State<HomeScreen>
                           border: Border.all(color: const Color(0xFF1E293B)),
                         ),
                         child: Text(
-                          words.isNotEmpty
-                              ? "\"$words\""
-                              : "说: \"open the door\" 或 \"开门\"",
+                          words.isNotEmpty ? "\"$words\"" : "Say: \"Open the door\" or \"Close the door\"",
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: words.isNotEmpty ? Colors.white : Colors.white38,
@@ -616,10 +593,10 @@ class _HomeScreenState extends State<HomeScreen>
                             fontWeight: words.isNotEmpty ? FontWeight.w600 : FontWeight.normal,
                           ),
                         ),
-                      );
-                    },
-                  ),
-                ],
+                      ),
+                    ],
+                  );
+                },
               );
             },
           ),
